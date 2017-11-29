@@ -1,0 +1,204 @@
+---
+title: "Strava Data Science Report"
+author: "Kishore Vasan"
+date: "11/27/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(kableExtra)
+library(knitr)
+set.seed(1234)
+```
+
+\begin{center}
+\includegraphics[width=400pt,height=150pt]{/Users/studentuser/Desktop/download.png}  
+\end{center}
+
+```{r echo=FALSE}
+#LOAD DATA
+data = read.csv("strava_activity.csv")
+```
+
+# \color{blue} The Social Network for Athletes 
+
+__Strava__ is a website and mobile app used to track athletic activity via satellite navigation. The service uses the GPS functionality of mobile phones or other devices such as Garmin navigator devices to record position and time data during athletic activities.  
+The data was collected randomly using the Strava API. The dataset contains `r nrow(data)` rows with `r ncol(data)` paramters about athletes, including but not limited to - __Achievement Count, Athlete Country, Athlete Sex, Average Speed, Average Heartrate, Maximum Heartrate, Distance, Elapsed Time, Suffer Score, Total Elevation Gain and Workout Type(Activity).__
+
+The first part of this report will focus on answering the question - __\color{red}Do men exercise more intensly than women?__ and the second part of the report will hope to find out __\color{red}if the maximum heartrate acheived by athletes is same across different activities__ and then hope __\color{red}to predict the type of activity using different paramters.__  
+\underline{Note:} In this report we will also be using the __Kudos Count__ parameter. Kudos is similar to a Facebook Like that can be given by fellow athletes to other athletes.  
+
+# \color{blue}Data Preparation
+
+```{r echo=FALSE}
+#DATA PREP
+initialdata <- filter(data,athlete.sex!="")
+initialdata$athlete.sex <- as.character(initialdata$athlete.sex)
+tmpdata <- data.frame(table(initialdata$athlete.sex))
+
+testdata = filter(data,has_heartrate==1)%>%filter(athlete.sex!="")%>%select(athlete.sex,type,max_heartrate,kudos_count,elapsed_time)
+testdata <- filter(testdata,max_heartrate!=0)%>%filter(max_heartrate!=1)
+testdata$type <- as.character(testdata$type)
+testdata <- filter(testdata,!(type%in%
+                      c("BackcountrySki","EBikeRide","Elliptical","Kayaking",
+                      "RockClimbing","Snowboard","Snowshoe","StandUpPaddling","Yoga")))
+
+tmpdata2 <- initialdata
+tmpdata2$athlete.sex <- ifelse(tmpdata2$athlete.sex=="M",0,1)
+```
+
+* Filter rows without a gender value and convert the Male values to 0 and female values to 1. After this we end up with a total dataset row count of `r nrow(initialdata)`.  
+* Filter rows that dont have a maximum heartrate and also rows with maximum heartrate as 0 or 1(which are obviously false). Here we end up with a filtered dataset row count of `r nrow(testdata)`
+
+# \color{blue}Exploratory Data Analysis 
+
+One of the initial explorations that is esssential is to see the representation of different groups in the dataset.  
+
+```{r echo=FALSE}
+g <- data.frame(table(testdata$athlete.sex))
+g <- g[2:3,]
+q <- rbind(tmpdata,g)
+q$type <- as.factor(c("Unfiltered","Unfiltered","Filtered","Filtered"))
+ggplot(q,aes(x=Var1,y=Freq,fill=type))+
+   geom_bar(stat="identity",position="dodge")+
+   xlab("Gender")+ylab("Frequency")+ggtitle("Number of Observations")
+```
+
+As you can see from the above bar plot, the dataset is pretty evenly split between Male and Female observation in the original data collection, thus removing the problem of bias with data representation. But looking at the __gender representation in the maximum heartrate filtered dataset calls for concern when doing analysis.__  
+Now that we have a basic idea of the dataset, we can now move on to answer specific questions about the Strava dataset.      
+
+# \color{red}Do men tend to exercise more intensely than women?
+
+This is a very subjective question that can be answered to a certain level using Data Science. We can __use a Linear model to see how the achievement count(which ideally portrays workout intensity) relates with average speed, distance and athlete sex.__ We can then look at the coefficients corresponding to the athlete sex parameter and formulate an opinion about how the achievement count(or intensity level) correlates with gender.  
+\underline{Note:} We will not be able to use maximum heartrate value in the linear model due to bias in the sample size as shown above.  
+
+```{r echo=FALSE}
+set.seed(1234)
+u <- summary(lm(achievement_count ~ distance + average_speed+athlete.sex,tmpdata2))
+kable(u$coefficients)
+```
+
+As you can see from the coefficient value of athlete.sex, though small there is an increase in achievement count of __0.4339802595__ when athlete sex is 1(or female) or the acheivement count of a female is 0.4339803 higher than that of a male when all the other parameters are the same. We also get a correlation value(R squared value) of __`r u$r.squared`__. This shows that the variables used in the linear model have a positive correlation with the Achievement Count variable.   
+__Hence, we can say that women exercise more intensly than men.__
+
+# \color{red}Is the maximum heartrate achieved independent of the type of activity?
+
+__\underline{Motivation:}__    
+
+Most people workout for heart reasons- in particular to increase the heart capacity(or maximum heartrate). But __is the maximum heartrate achieved same across all activities?__  
+To answer this question, we can use either maximum heartrate or average heartrate values from the dataset. The problem with average heartrate is that it gets affected by the duration of workout. There could be people who work out for a long time less intensly compared to some who work out for a short time but intensly.  
+The goal here is to __see if the average maximum heartrate people achieve doing different activities using Strava the same at 0.05 level of significance?__ 
+
+
+```{r echo=FALSE}
+g <- ggplot(testdata, aes(type, max_heartrate))
+g + geom_boxplot(fill="plum")+
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))+
+  labs(title="Range of Values in Type of Activity", 
+       subtitle="Box plot of activity data on both genders",
+       caption="Source: Strava Inc.",
+       x="Type of Activity",
+       y="Maximum Heartrate")
+
+```
+
+As you can see from the box plot, there are quite a few outliers in the Ride and Run activity types. There is also a difference in the average maximum heartrate among each activities and quite a difference in means within the groups(activities). To check if the grand mean(mean of means) different for each activity. __To do this ideally we would use Analysis of Variance(ANOVA) test.__ 
+
+\break
+
+But first, lets look at the sample size across each activity.
+```{r echo=FALSE}
+u<- data.frame(table(testdata$type))
+colnames(u) <- c("Type","Freq")
+kable(u)
+```
+
+Though there is a huge difference in the sample size between groups. __ANOVA will still be able to deal with unequal sample sizes across groups to a certain level.__  
+__The ANOVA test, however requires that variances be equal across groups.__ The Bartlett test can be used to verify this assumption.   
+
+__\underline{Bartlett's Test:}__  
+
+__Ho:__ The population variance is the same across all activities  
+__Ha:__ The population variance is not the across all activities
+
+```{r echo=FALSE}
+bartlett.test(max_heartrate~type,testdata)
+```
+
+Since the p value is <0.05, we reject the Null hypothesis and hence with a 95% confidence __we can conclude that the variance among groups is not the same.__
+
+We cannot assume normality of the population each group was sampled from and as concluded from the test above, we also cannot conclude that the variance is equal among the groups. Hence, __we cannot use one-way ANOVA test but instead we will use Kruskal-Wallis rank sum test__. This is a non-parametric test that is less sensitive to the normality assumption. 
+
+__\underline{Kruskal-Wallis Test:}__
+
+__Ho:__ The mean of each group is same  
+__Ha:__ The mean of each group is not the same  
+
+```{r echo=FALSE}
+testdata$type.activity <- as.factor(testdata$type)
+kruskal.test(max_heartrate~type.activity,data = select(testdata,-type))
+```
+
+Since p value is <0.05 we reject the Null and accept the Alternate. Hence with a 95% confidence __we can say that the means among populations is not the same.__ 
+
+# \color{red}Can we predict Type of Activity?
+
+Now that we have showed that maximum heartrate is not the same across activities at 0.05 level of significance, we can use this fact to create a K-Nearest-Neighbor model to predict the type of activity. 
+
+__\underline{K-Nearest Neighbors Model:}__  
+
+K-Nearest Neighbors(k-NN) is a type of __instance-based learning, or lazy learning, where the function is only approximated locally and all computation is deferred until classification.__ In the classification phase, k is a user-defined constant, and an unlabeled vector (a query or test point) is classified by assigning the label which is most frequent among the k training samples nearest to that query point. A commonly used distance metric for continuous variables is Euclidean distance.       
+We can use this method to predict the type of activity, we will use __Maximum Heartrate, Kudos Count and Elapsed Time__ values from the dataset.  
+
+Splitting the dataset into 75% training data and 25% test data. Using repeated Cross Validation method of 10 splits running 3 times on each epoch to further train the model better.  
+
+Given below are the model results for test data.  
+
+```{r echo=FALSE,warning=FALSE}
+#KNN 
+set.seed(1234)
+tmptestdata <- testdata%>%select(-type.activity,-athlete.sex)
+
+train_transformed <- tmptestdata
+
+index <- createDataPartition(train_transformed$max_heartrate, p=0.75, list=FALSE)
+testdata4 <- train_transformed[index,]
+testdata5 <- train_transformed[-index,]
+
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+model_knn <- train(select(testdata4,-type),testdata4$type,method="knn",trControl=trctrl,tuneLength = 10)
+
+# Predict values
+predictions<-predict.train(object=model_knn,select(testdata5,-type))
+
+reference <- factor(testdata5$type)
+u = union(predictions, reference)
+t = table(factor(predictions, u), factor(reference, u))
+my_conf = confusionMatrix(t)
+results <- data.frame(my_conf$overall)
+tmprownames <- rownames(results)[1:6]
+results <- data.frame(results[1:6,])
+colnames(results) <- c("Result")
+rownames(results) <- tmprownames
+results
+```
+
+We can also see how the training accuracy had improved over increase in number of neighbors.
+```{r echo=FALSE,fig.align="center"}
+plot(model_knn,main="Model Accuracy Plot",ylab="Training Accuracy")
+```
+
+# \color{blue}Conclusion  
+
+The few questions that I was able to get to in this report using Strava data are just pebbles in an ocean of questions that could be asked from this dataset and answered using Data Science.  
+The initial question about comparing intensity of workout between Men and Women was done by looking at the coefficient of gender variable in a linear model. This is just one way to go about answering the question. It is important to note that the coeffecient of gender was very low and even close to 0. So there is room for improvement in terms of building the model, which __could possibly increase the favorability towards women or even reverse the answer towards Men.__ Hence we cannot say with utmost confidence that women exercise more intensly than men.  
+\break
+The second question was to see if the maximum heartrate achieved by people is same across different activities. It goes without saying that maximum heartrate is not a precise value and is bound to some error in calculation as we can see from the outliers in the box plot. The ideal way to compare heartrates across different groups(activities) would be to use ANOVA test. The most important assumption in ANOVA is that the variances are same across groups. We used Bartlett's test to make sure that the variances are same. Since we weren't able to __conclude that the variances are same with a 95% confidence__ and there is a variation in sample size across groups, we were not able to use the standard ANOVA test. Instead we used Kruskal Wallis test that does not require that each group be sampled from a normal population. This test __concluded that the maximum heartrate is not the same across all activities at a 0.05 level of significance.__  
+\break
+The conclusion in the second part was the motivation to see if using this conclusion we can create a Nearest Neighbors model to identify the type of activity. We also decided to include Kudos count and Elapsed time to better fit the model. While we were able to get close to a 70% accuracy in training data, the test data accuracy was close to 65%. This is a __good result given the huge dataset bias in number of data for each category.__ These values can be increased given good representation of different activities in the dataset.  
